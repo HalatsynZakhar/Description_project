@@ -8,6 +8,7 @@ from mono_processor import (
     KeyPool,
     remove_decorative_tags,
     run_processing,
+    source_description_for_model,
     validate_description,
     validate_title,
 )
@@ -68,6 +69,11 @@ def test_decorative_tags_are_removed_before_mono_validation() -> None:
     description = remove_decorative_tags("<h5><strong>Опис</strong></h5><p>Текст</p>")
     assert description == "<h5>Опис</h5><p>Текст</p>"
     validate_description(description, "Текст")
+
+
+def test_source_sections_banned_by_mono_are_not_sent_to_model() -> None:
+    source = "Особливості:\n* Світиться\nКомплектація:\n* Батарейки\nДодаткова інформація:\n* Режим"
+    assert source_description_for_model(source) == "Особливості:\n* Світиться"
 
 
 def test_key_state_survives_restart(tmp_path: Path) -> None:

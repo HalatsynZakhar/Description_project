@@ -47,6 +47,7 @@ BANNED_TITLE_WORDS = {
     "copy",
     "original",
 }
+EXCLUDED_SOURCE_SECTIONS = {"комплектація", "додаткова інформація"}
 
 
 class ProcessorError(Exception):
@@ -252,6 +253,31 @@ def load_prompt() -> str:
         raise ProcessorError(f"Не вдалося прочитати промпт {PROMPT_PATH}: {error}") from error
 
 
+def normalized_section_heading(line: str) -> str:
+    """Повертає заголовок секції без HTML, двокрапки та зайвих пробілів."""
+    plain = strip_html(line).strip().lower()
+    return plain.rstrip(":").strip()
+
+
+def source_description_for_model(source_description: str) -> str:
+    """Викидає секції, які вимоги MONO прямо забороняють переносити в опис."""
+    kept_lines: list[str] = []
+    skip_section = False
+    for line in source_description.splitlines():
+        heading = normalized_section_heading(line)
+        if heading in EXCLUDED_SOURCE_SECTIONS:
+            skip_section = True
+            continue
+        # Зустріли новий короткий заголовок секції — знову читаємо потрібні дані.
+        is_heading = bool(heading) and line.strip().endswith(":") and not line.lstrip().startswith("*")
+        if skip_section and is_heading:
+            skip_section = False
+        if not skip_section:
+            kept_lines.append(line)
+    cleaned = "\n".join(kept_lines).strip()
+    return cleaned or source_description
+
+
 def response_diagnostics(response: Any) -> str:
     """Коротка причина порожньої відповіді без збереження даних товару."""
     candidates = getattr(response, "candidates", None) or []
@@ -328,9 +354,10 @@ class GeminiGenerator:
         }
 
     def generate(self, source_title: str, source_description: str) -> dict[str, str]:
+        source_for_model = source_description_for_model(source_description)
         prompt = (
             self.prompt_template.replace("{source_title}", source_title).replace(
-                "{source_description}", source_description
+                "{source_description}", source_for_model
             )
         )
         last_error: Exception | None = None

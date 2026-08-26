@@ -81,6 +81,11 @@ def test_source_sections_banned_by_mono_are_not_sent_to_model() -> None:
     assert source_description_for_model(source) == "Особливості:\n* Світиться"
 
 
+def test_tell_my_fortune_line_is_always_removed_before_model_request() -> None:
+    source = "Особливості:\n* Режим Tell My Fortune для розваги\n* Світиться"
+    assert source_description_for_model(source) == "Особливості:\n* Світиться"
+
+
 def test_key_state_survives_restart(tmp_path: Path) -> None:
     keys_path = tmp_path / "keys.json"
     state_path = tmp_path / "keys_state.json"

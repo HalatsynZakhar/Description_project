@@ -48,6 +48,7 @@ BANNED_TITLE_WORDS = {
     "original",
 }
 EXCLUDED_SOURCE_SECTIONS = {"комплектація", "додаткова інформація"}
+BLOCKED_SOURCE_LINE_PATTERN = re.compile(r"tell\s+my\s+fortune", re.IGNORECASE)
 
 
 class ProcessorError(Exception):
@@ -264,6 +265,8 @@ def source_description_for_model(source_description: str) -> str:
     kept_lines: list[str] = []
     skip_section = False
     for line in source_description.splitlines():
+        if BLOCKED_SOURCE_LINE_PATTERN.search(line):
+            continue
         heading = normalized_section_heading(line)
         if heading in EXCLUDED_SOURCE_SECTIONS:
             skip_section = True

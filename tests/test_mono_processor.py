@@ -71,6 +71,11 @@ def test_decorative_tags_are_removed_before_mono_validation() -> None:
     validate_description(description, "Текст")
 
 
+def test_description_is_not_rejected_only_for_being_longer_than_source() -> None:
+    description = "<p>" + ("Детальна характеристика. " * 100) + "</p>"
+    validate_description(description, "Короткий опис")
+
+
 def test_source_sections_banned_by_mono_are_not_sent_to_model() -> None:
     source = "Особливості:\n* Світиться\nКомплектація:\n* Батарейки\nДодаткова інформація:\n* Режим"
     assert source_description_for_model(source) == "Особливості:\n* Світиться"

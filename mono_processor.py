@@ -486,11 +486,9 @@ def validate_description(description: str, source_description: str) -> None:
     disallowed = tags - ALLOWED_HTML_TAGS
     if disallowed:
         raise GenerationError(f"В описі є заборонені HTML-теги: {', '.join(sorted(disallowed))}.")
-    source_length = len(strip_html(source_description).strip())
-    output_length = len(strip_html(description).strip())
-    reasonable_limit = max(450, int(source_length * 1.5) + 180)
-    if output_length > reasonable_limit:
-        raise GenerationError("Опис суттєво довший за вихідний текст.")
+    # Довжину контролює промпт. Відносна межа відхиляла коректні детальні описи.
+    # source_description збережено у сигнатурі для сумісності викликів.
+    _ = source_description
 
 
 def validate_result(result: dict[str, str], source_description: str) -> None:

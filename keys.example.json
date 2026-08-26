@@ -1,0 +1,14 @@
+{
+  "keys": [
+    {
+      "name": "google-project-1",
+      "api_key": "ВСТАВТЕ_СЮДИ_КЛЮЧ_GEMINI",
+      "enabled": true
+    },
+    {
+      "name": "google-project-2",
+      "api_key": "ВСТАВТЕ_СЮДИ_ЩЕ_ОДИН_КЛЮЧ",
+      "enabled": true
+    }
+  ]
+}

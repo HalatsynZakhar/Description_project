@@ -1,0 +1,70 @@
+from pathlib import Path
+
+from openpyxl import Workbook, load_workbook
+
+from mono_processor import KeyPool, run_processing, validate_description, validate_title
+
+
+class FakeGenerator:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def generate(self, source_title: str, source_description: str) -> dict[str, str]:
+        self.calls += 1
+        return {
+            "title": "Навушники Acme X1 чорні (X1-BK)",
+            "description": "<h5>Зручне прослуховування</h5><br><p>Бездротові навушники для щоденного використання.</p>",
+        }
+
+
+def test_processor_saves_each_result_and_resumes(tmp_path: Path) -> None:
+    path = tmp_path / "товари.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Товари"
+    sheet.append(["Стара назва", "Старий опис"])
+    sheet.append(["Acme X1", "Бездротові навушники для щоденного використання."])
+    sheet.append(["Без опису", None])
+    workbook.save(path)
+
+    generator = FakeGenerator()
+    result = run_processing(path, "Товари", 1, 2, generator)
+    assert result.processed == 1
+    assert result.skipped_missing_source == 1
+    assert generator.calls == 1
+
+    saved = load_workbook(path)["Товари"]
+    assert saved.cell(1, 3).value == "Назва MONO"
+    assert saved.cell(1, 4).value == "Опис MONO"
+    assert saved.cell(2, 3).value == "Навушники Acme X1 чорні (X1-BK)"
+
+    rerun = run_processing(path, "Товари", 1, 2, generator)
+    assert rerun.processed == 0
+    assert rerun.skipped_completed == 1
+    assert generator.calls == 1
+
+
+def test_validation_rejects_links_and_bad_tags() -> None:
+    validate_title("Кабель USB-C чорний")
+    validate_description("<h5>Опис</h5><br><p>Надійний кабель.</p>", "Надійний кабель")
+
+    try:
+        validate_description("<img src=\"https://example.com/a.jpg\">", "Опис")
+    except Exception as error:
+        assert "URL" in str(error)
+    else:
+        raise AssertionError("Посилання має бути відхилено")
+
+
+def test_key_state_survives_restart(tmp_path: Path) -> None:
+    keys_path = tmp_path / "keys.json"
+    state_path = tmp_path / "keys_state.json"
+    keys_path.write_text(
+        '{"keys": [{"name": "one", "api_key": "secret", "enabled": true}]}', encoding="utf-8"
+    )
+    pool = KeyPool(keys_path, state_path)
+    key = next(iter(pool.available()))
+    pool.mark_failure(key, "rate_limited", "429 RESOURCE_EXHAUSTED", retry_after_seconds=60)
+
+    restarted_pool = KeyPool(keys_path, state_path)
+    assert list(restarted_pool.available()) == []

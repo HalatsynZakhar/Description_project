@@ -4,7 +4,13 @@ import json
 from openpyxl import Workbook, load_workbook
 
 import mono_processor
-from mono_processor import KeyPool, run_processing, validate_description, validate_title
+from mono_processor import (
+    KeyPool,
+    remove_decorative_tags,
+    run_processing,
+    validate_description,
+    validate_title,
+)
 
 
 class FakeGenerator:
@@ -56,6 +62,12 @@ def test_validation_rejects_links_and_bad_tags() -> None:
         assert "URL" in str(error)
     else:
         raise AssertionError("Посилання має бути відхилено")
+
+
+def test_decorative_tags_are_removed_before_mono_validation() -> None:
+    description = remove_decorative_tags("<h5><strong>Опис</strong></h5><p>Текст</p>")
+    assert description == "<h5>Опис</h5><p>Текст</p>"
+    validate_description(description, "Текст")
 
 
 def test_key_state_survives_restart(tmp_path: Path) -> None:

@@ -37,6 +37,7 @@ HTTP_TIMEOUT_MS = 120_000
 
 ALLOWED_HTML_TAGS = {"h5", "br", "p", "ul", "li"}
 HTML_TAG_PATTERN = re.compile(r"</?\s*([a-zA-Z0-9]+)(?:\s+[^<>]*)?\s*/?>")
+DECORATIVE_TAG_PATTERN = re.compile(r"</?\s*(?:strong|b|em|i)\s*>", re.IGNORECASE)
 URL_PATTERN = re.compile(r"(?:https?://|www\.)", re.IGNORECASE)
 BANNED_TITLE_WORDS = {
     "акція",
@@ -58,6 +59,10 @@ class NoAvailableKeysError(ProcessorError):
 
 class GenerationError(ProcessorError):
     """Модель не повернула придатного результату для одного рядка."""
+
+
+class RetryableGenerationError(GenerationError):
+    """Відповідь моделі можна безпечно один раз повторити."""
 
 
 @dataclass(frozen=True)
@@ -247,6 +252,24 @@ def load_prompt() -> str:
         raise ProcessorError(f"Не вдалося прочитати промпт {PROMPT_PATH}: {error}") from error
 
 
+def response_diagnostics(response: Any) -> str:
+    """Коротка причина порожньої відповіді без збереження даних товару."""
+    candidates = getattr(response, "candidates", None) or []
+    reasons = [
+        str(getattr(candidate, "finish_reason", ""))
+        for candidate in candidates
+        if getattr(candidate, "finish_reason", None)
+    ]
+    feedback = getattr(response, "prompt_feedback", None)
+    block_reason = getattr(feedback, "block_reason", None) if feedback else None
+    parts = []
+    if reasons:
+        parts.append("finish_reason=" + ",".join(reasons))
+    if block_reason:
+        parts.append(f"block_reason={block_reason}")
+    return "; ".join(parts) or "причину не надано API"
+
+
 class GeminiGenerator:
     """Один виклик Gemini повертає і назву, і опис товару."""
 
@@ -290,11 +313,13 @@ class GeminiGenerator:
         )
         text = getattr(response, "text", None)
         if not text:
-            raise GenerationError("Gemini не повернув текст відповіді.")
+            raise RetryableGenerationError(
+                "Gemini не повернув текст відповіді (" + response_diagnostics(response) + ")."
+            )
         try:
             data = json.loads(text)
         except json.JSONDecodeError as error:
-            raise GenerationError("Gemini повернув не JSON-відповідь.") from error
+            raise RetryableGenerationError("Gemini повернув не JSON-відповідь.") from error
         if not isinstance(data, dict):
             raise GenerationError("Відповідь Gemini має бути JSON-об’єктом.")
         return {
@@ -320,6 +345,20 @@ class GeminiGenerator:
                     validate_result(result, source_description)
                     self.pool.mark_success(key)
                     return result
+                except RetryableGenerationError as error:
+                    last_error = error
+                    log_gemini_error(
+                        "retryable_model_response",
+                        key_name=key.name,
+                        attempt=attempt + 1,
+                        error_type=type(error).__name__,
+                        error_message=str(error),
+                    )
+                    if attempt + 1 < MAX_TRANSIENT_RETRIES:
+                        print("Gemini: неповна відповідь, повторюю запит…", flush=True)
+                        time.sleep((2**attempt) + random.uniform(0, 0.5))
+                        continue
+                    raise
                 except GenerationError:
                     # Відповідь моделі не є ознакою несправного ключа.
                     raise
@@ -386,6 +425,11 @@ def strip_html(value: str) -> str:
     return re.sub(r"<[^>]*>", "", value)
 
 
+def remove_decorative_tags(description: str) -> str:
+    """Теги оформлення не дозволені MONO й не змінюють зміст тексту."""
+    return DECORATIVE_TAG_PATTERN.sub("", description)
+
+
 def validate_title(title: str) -> None:
     if not title:
         raise GenerationError("Gemini повернув порожню назву.")
@@ -423,6 +467,7 @@ def validate_description(description: str, source_description: str) -> None:
 
 
 def validate_result(result: dict[str, str], source_description: str) -> None:
+    result["description"] = remove_decorative_tags(result["description"])
     validate_title(result["title"])
     validate_description(result["description"], source_description)
 

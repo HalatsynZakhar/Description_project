@@ -52,8 +52,10 @@
 виконайте:
 
 ```powershell
-.\.venv\Scripts\python.exe test_all_keys.py
+.\.venv\Scripts\python.exe check_keys.py
 ```
 
 Скрипт виведе `OK` із відповіддю або точну помилку для кожного ключа. Самі
-значення ключів у консоль не виводяться.
+значення ключів у консоль не виводяться. У PyCharm натисніть правою кнопкою на
+`check_keys.py` і виберіть **Run 'check_keys'**, а не **Run pytest**. Для запуску
+подвійним кліком у Провіднику є файл `check_keys.cmd`.

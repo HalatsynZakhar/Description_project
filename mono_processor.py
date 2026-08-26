@@ -30,6 +30,9 @@ DESCRIPTION_HEADER = "Опис MONO"
 HEADER_ROW = 1
 INVALID_KEY_COOLDOWN = timedelta(hours=24)
 MAX_TRANSIENT_RETRIES = 2
+# Google SDK uses milliseconds. A request that takes longer is treated as a
+# temporary API failure, so the next key can be tried instead of waiting forever.
+HTTP_TIMEOUT_MS = 120_000
 
 ALLOWED_HTML_TAGS = {"h5", "br", "p", "ul", "li"}
 HTML_TAG_PATTERN = re.compile(r"</?\s*([a-zA-Z0-9]+)(?:\s+[^<>]*)?\s*/?>")
@@ -244,7 +247,15 @@ class GeminiGenerator:
                 "Не встановлено залежності. Виконайте: .\\.venv\\Scripts\\python.exe -m pip install -r requirements.txt"
             ) from error
 
-        client = genai.Client(api_key=api_key)
+        client = genai.Client(
+            api_key=api_key,
+            http_options=types.HttpOptions(
+                timeout=HTTP_TIMEOUT_MS,
+                # The application owns retries and key rotation. SDK default is 5,
+                # which can make one invisible request wait for several minutes.
+                retryOptions=types.HttpRetryOptions(attempts=1),
+            ),
+        )
         response = client.models.generate_content(
             model=MODEL_NAME,
             contents=prompt,
@@ -285,6 +296,10 @@ class GeminiGenerator:
         for key in self.pool.available():
             for attempt in range(MAX_TRANSIENT_RETRIES):
                 try:
+                    print(
+                        f"Gemini: ключ «{key.name}», спроба {attempt + 1}/{MAX_TRANSIENT_RETRIES}…",
+                        flush=True,
+                    )
                     result = self._request(key.value, prompt)
                     validate_result(result, source_description)
                     self.pool.mark_success(key)
@@ -298,9 +313,14 @@ class GeminiGenerator:
                     if category == "request_error":
                         raise ProcessorError(f"Помилка запиту Gemini: {error}") from error
                     if category == "transient" and attempt + 1 < MAX_TRANSIENT_RETRIES:
+                        print("Gemini: тимчасова помилка, повторюю запит…", flush=True)
                         time.sleep((2**attempt) + random.uniform(0, 0.5))
                         continue
                     self.pool.mark_failure(key, category, str(error), retry_after)
+                    print(
+                        f"Gemini: ключ «{key.name}» тимчасово відкладено ({category}).",
+                        flush=True,
+                    )
                     break
 
         next_time = self.pool.next_available_time()
@@ -443,6 +463,7 @@ def run_processing(
             continue
 
         try:
+            print(f"Рядок {row}: надсилаю запит до Gemini…", flush=True)
             result = generator.generate(source_title, source_description)
         except NoAvailableKeysError:
             raise

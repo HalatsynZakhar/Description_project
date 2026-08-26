@@ -1,6 +1,7 @@
 # Secrets and runtime state
 keys.json
 keys_state.json
+logs/
 
 # Input workbooks may contain commercial data and are edited in place.
 input/*.xlsx

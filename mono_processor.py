@@ -24,6 +24,7 @@ INPUT_DIR = BASE_DIR / "input"
 PROMPT_PATH = BASE_DIR / "prompts" / "mono_product_prompt.txt"
 KEYS_PATH = BASE_DIR / "keys.json"
 KEY_STATE_PATH = BASE_DIR / "keys_state.json"
+ERROR_LOG_PATH = BASE_DIR / "logs" / "gemini_errors.jsonl"
 MODEL_NAME = "gemini-3.5-flash-lite"
 TITLE_HEADER = "Назва MONO"
 DESCRIPTION_HEADER = "Опис MONO"
@@ -120,6 +121,21 @@ def write_json_atomically(path: Path, data: dict[str, Any]) -> None:
     finally:
         if temporary_path and temporary_path.exists():
             temporary_path.unlink(missing_ok=True)
+
+
+def log_gemini_error(event: str, **details: Any) -> None:
+    """Дописує діагностику без API-ключів і без текстів товарів."""
+    record = {
+        "timestamp": utc_now().isoformat(),
+        "event": event,
+        **details,
+    }
+    ERROR_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with ERROR_LOG_PATH.open("a", encoding="utf-8", newline="\n") as file:
+        json.dump(record, file, ensure_ascii=False)
+        file.write("\n")
+        file.flush()
+        os.fsync(file.fileno())
 
 
 class KeyPool:
@@ -311,12 +327,28 @@ class GeminiGenerator:
                     last_error = error
                     category, retry_after = classify_api_error(error)
                     if category == "request_error":
+                        log_gemini_error(
+                            "api_request_error",
+                            key_name=key.name,
+                            attempt=attempt + 1,
+                            error_type=type(error).__name__,
+                            error_message=str(error),
+                        )
                         raise ProcessorError(f"Помилка запиту Gemini: {error}") from error
                     if category == "transient" and attempt + 1 < MAX_TRANSIENT_RETRIES:
                         print("Gemini: тимчасова помилка, повторюю запит…", flush=True)
                         time.sleep((2**attempt) + random.uniform(0, 0.5))
                         continue
                     self.pool.mark_failure(key, category, str(error), retry_after)
+                    log_gemini_error(
+                        "api_unavailable",
+                        key_name=key.name,
+                        attempt=attempt + 1,
+                        category=category,
+                        retry_after_seconds=retry_after,
+                        error_type=type(error).__name__,
+                        error_message=str(error),
+                    )
                     print(
                         f"Gemini: ключ «{key.name}» тимчасово відкладено ({category}).",
                         flush=True,
@@ -469,6 +501,14 @@ def run_processing(
             raise
         except GenerationError as error:
             summary.failed_rows.append(row)
+            log_gemini_error(
+                "invalid_model_response",
+                workbook_name=workbook_path.name,
+                sheet_name=sheet_name,
+                row=row,
+                error_type=type(error).__name__,
+                error_message=str(error),
+            )
             print(f"Рядок {row}: пропущено через помилку — {error}")
             continue
 

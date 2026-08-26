@@ -1,7 +1,9 @@
 from pathlib import Path
+import json
 
 from openpyxl import Workbook, load_workbook
 
+import mono_processor
 from mono_processor import KeyPool, run_processing, validate_description, validate_title
 
 
@@ -68,3 +70,19 @@ def test_key_state_survives_restart(tmp_path: Path) -> None:
 
     restarted_pool = KeyPool(keys_path, state_path)
     assert list(restarted_pool.available()) == []
+
+
+def test_gemini_error_log_has_diagnostics_without_secret(tmp_path: Path, monkeypatch) -> None:
+    error_log = tmp_path / "logs" / "gemini_errors.jsonl"
+    monkeypatch.setattr(mono_processor, "ERROR_LOG_PATH", error_log)
+    mono_processor.log_gemini_error(
+        "api_unavailable",
+        key_name="project-a",
+        category="transient",
+        error_message="ReadTimeout",
+    )
+
+    record = json.loads(error_log.read_text(encoding="utf-8"))
+    assert record["event"] == "api_unavailable"
+    assert record["key_name"] == "project-a"
+    assert "api_key" not in record

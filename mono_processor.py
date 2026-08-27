@@ -521,6 +521,20 @@ def validate_title(title: str) -> None:
         raise GenerationError("Назва повністю написана CAPS LOCK.")
 
 
+def shorten_title(title: str, limit: int = 100) -> str:
+    """Скорочує назву лише за пробілом, зберігаючи основні початкові дані."""
+    if len(title) <= limit:
+        return title
+    words = title.split()
+    while words and len(" ".join(words)) > limit:
+        words.pop()
+    shortened = " ".join(words).rstrip(" ,.;:-")
+    if not shortened:
+        # Крайній випадок: один надто довгий технічний код не можна розрізати мовчки.
+        raise GenerationError("Назву неможливо скоротити до 100 символів без розриву слова.")
+    return shortened
+
+
 def validate_description(description: str, source_description: str) -> None:
     if not description:
         raise GenerationError("Gemini повернув порожній опис.")
@@ -545,6 +559,10 @@ def validate_result(
     validate_description_field: bool = True,
 ) -> None:
     if validate_title_field:
+        original_title = result.get("title", "")
+        result["title"] = shorten_title(original_title)
+        if result["title"] != original_title:
+            print("Gemini: назву скорочено до 100 символів.", flush=True)
         validate_title(result.get("title", ""))
     if validate_description_field:
         result["description"] = remove_decorative_tags(result.get("description", ""))

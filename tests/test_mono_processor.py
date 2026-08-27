@@ -8,6 +8,7 @@ from mono_processor import (
     KeyPool,
     remove_decorative_tags,
     run_processing,
+    shorten_title,
     source_description_for_model,
     validate_description,
     validate_title,
@@ -115,6 +116,14 @@ def test_decorative_tags_are_removed_before_mono_validation() -> None:
 def test_description_is_not_rejected_only_for_being_longer_than_source() -> None:
     description = "<p>" + ("Детальна характеристика. " * 100) + "</p>"
     validate_description(description, "Короткий опис")
+
+
+def test_long_title_is_shortened_at_word_boundary() -> None:
+    title = "Фігурка Marvel Веном із додатковою дуже довгою характеристикою кольору та особливостей моделі"
+    shortened = shorten_title(title)
+    assert len(shortened) <= 100
+    assert shortened == shortened.rstrip()
+    assert not shortened.endswith("характеристикою")
 
 
 def test_source_sections_banned_by_mono_are_not_sent_to_model() -> None:

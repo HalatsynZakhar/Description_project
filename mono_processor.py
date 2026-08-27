@@ -86,7 +86,16 @@ class ProcessingSummary:
 
 
 class ProductGenerator(Protocol):
-    def generate(self, source_title: str, source_description: str) -> dict[str, str]: ...
+    def generate(
+        self,
+        source_title: str,
+        source_description: str,
+        *,
+        generate_title: bool = True,
+        generate_description: bool = True,
+        existing_title: str = "",
+        existing_description: str = "",
+    ) -> dict[str, str]: ...
 
 
 def utc_now() -> datetime:
@@ -306,7 +315,7 @@ class GeminiGenerator:
         self.pool = pool
         self.prompt_template = prompt_template or load_prompt()
 
-    def _request(self, api_key: str, prompt: str) -> dict[str, str]:
+    def _request(self, api_key: str, prompt: str, fields: list[str]) -> dict[str, str]:
         try:
             from google import genai
             from google.genai import types
@@ -332,11 +341,8 @@ class GeminiGenerator:
                 response_mime_type="application/json",
                 response_schema={
                     "type": "object",
-                    "properties": {
-                        "title": {"type": "string"},
-                        "description": {"type": "string"},
-                    },
-                    "required": ["title", "description"],
+                    "properties": {field: {"type": "string"} for field in fields},
+                    "required": fields,
                 },
             ),
         )
@@ -351,18 +357,50 @@ class GeminiGenerator:
             raise RetryableGenerationError("Gemini повернув не JSON-відповідь.") from error
         if not isinstance(data, dict):
             raise GenerationError("Відповідь Gemini має бути JSON-об’єктом.")
-        return {
-            "title": cell_as_text(data.get("title")),
-            "description": cell_as_text(data.get("description")),
-        }
+        return {field: cell_as_text(data.get(field)) for field in fields}
 
-    def generate(self, source_title: str, source_description: str) -> dict[str, str]:
+    def generate(
+        self,
+        source_title: str,
+        source_description: str,
+        *,
+        generate_title: bool = True,
+        generate_description: bool = True,
+        existing_title: str = "",
+        existing_description: str = "",
+    ) -> dict[str, str]:
+        fields = []
+        if generate_title:
+            fields.append("title")
+        if generate_description:
+            fields.append("description")
+        if not fields:
+            raise ProcessorError("Немає полів для генерації.")
+
+        if fields == ["title"]:
+            generation_task = "Створи ЛИШЕ українську назву. Поле description не повертай."
+        elif fields == ["description"]:
+            generation_task = "Створи ЛИШЕ український опис. Поле title не повертай."
+        else:
+            generation_task = "Створи одночасно українську назву й український опис."
+        response_contract = json.dumps({field: "рядок" for field in fields}, ensure_ascii=False)
         source_for_model = source_description_for_model(source_description)
         prompt = (
-            self.prompt_template.replace("{source_title}", source_title).replace(
-                "{source_description}", source_for_model
-            )
+            self.prompt_template.replace("{response_contract}", response_contract)
+            .replace("{generation_task}", generation_task)
+            .replace("{source_title}", source_title)
+            .replace("{source_description}", source_for_model)
         )
+        if existing_title:
+            prompt += (
+                "\n\nУже затверджена назва MONO (лише контекст, не повертай її):\n"
+                + existing_title
+            )
+        if existing_description:
+            prompt += (
+                "\n\nУже затверджений опис MONO (лише контекст, не повертай його):\n"
+                + existing_description
+            )
         last_error: Exception | None = None
         for key in self.pool.available():
             for attempt in range(MAX_TRANSIENT_RETRIES):
@@ -371,8 +409,13 @@ class GeminiGenerator:
                         f"Gemini: ключ «{key.name}», спроба {attempt + 1}/{MAX_TRANSIENT_RETRIES}…",
                         flush=True,
                     )
-                    result = self._request(key.value, prompt)
-                    validate_result(result, source_description)
+                    result = self._request(key.value, prompt, fields)
+                    validate_result(
+                        result,
+                        source_description,
+                        validate_title_field=generate_title,
+                        validate_description_field=generate_description,
+                    )
                     self.pool.mark_success(key)
                     return result
                 except RetryableGenerationError as error:
@@ -494,10 +537,18 @@ def validate_description(description: str, source_description: str) -> None:
     _ = source_description
 
 
-def validate_result(result: dict[str, str], source_description: str) -> None:
-    result["description"] = remove_decorative_tags(result["description"])
-    validate_title(result["title"])
-    validate_description(result["description"], source_description)
+def validate_result(
+    result: dict[str, str],
+    source_description: str,
+    *,
+    validate_title_field: bool = True,
+    validate_description_field: bool = True,
+) -> None:
+    if validate_title_field:
+        validate_title(result.get("title", ""))
+    if validate_description_field:
+        result["description"] = remove_decorative_tags(result.get("description", ""))
+        validate_description(result["description"], source_description)
 
 
 def save_workbook_atomically(workbook: Workbook, path: Path) -> None:
@@ -559,8 +610,11 @@ def run_processing(
         output_title = sheet.cell(row, title_output_column).value
         output_description = sheet.cell(row, description_output_column).value
 
-        # Будь-яке готове поле захищає попередній результат від перезапису.
-        if not is_empty(output_title) or not is_empty(output_description):
+        has_output_title = not is_empty(output_title)
+        has_output_description = not is_empty(output_description)
+        # Лише повністю готовий рядок пропускається. Частково готовий рядок
+        # доповнюється без перезапису наявного результату.
+        if has_output_title and has_output_description:
             summary.skipped_completed += 1
             continue
         if not source_title or not source_description:
@@ -568,8 +622,23 @@ def run_processing(
             continue
 
         try:
-            print(f"Рядок {row}: надсилаю запит до Gemini…", flush=True)
-            result = generator.generate(source_title, source_description)
+            missing_fields = []
+            if not has_output_title:
+                missing_fields.append("назва")
+            if not has_output_description:
+                missing_fields.append("опис")
+            print(
+                f"Рядок {row}: надсилаю запит до Gemini для поля {', '.join(missing_fields)}…",
+                flush=True,
+            )
+            result = generator.generate(
+                source_title,
+                source_description,
+                generate_title=not has_output_title,
+                generate_description=not has_output_description,
+                existing_title=cell_as_text(output_title),
+                existing_description=cell_as_text(output_description),
+            )
         except NoAvailableKeysError:
             raise
         except GenerationError as error:
@@ -585,8 +654,10 @@ def run_processing(
             print(f"Рядок {row}: пропущено через помилку — {error}")
             continue
 
-        sheet.cell(row, title_output_column).value = result["title"]
-        sheet.cell(row, description_output_column).value = result["description"]
+        if not has_output_title:
+            sheet.cell(row, title_output_column).value = result["title"]
+        if not has_output_description:
+            sheet.cell(row, description_output_column).value = result["description"]
         # Помилка запису є критичною: не можна продовжувати з незбереженою книгою.
         save_workbook_atomically(workbook, workbook_path)
         summary.processed += 1

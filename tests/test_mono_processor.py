@@ -17,12 +17,24 @@ from mono_processor import (
 class FakeGenerator:
     def __init__(self) -> None:
         self.calls = 0
+        self.requests: list[dict[str, object]] = []
 
-    def generate(self, source_title: str, source_description: str) -> dict[str, str]:
+    def generate(
+        self,
+        source_title: str,
+        source_description: str,
+        **options: object,
+    ) -> dict[str, str]:
         self.calls += 1
-        return {
+        self.requests.append(options)
+        result = {
             "title": "Навушники Acme X1 чорні (X1-BK)",
             "description": "<h5>Зручне прослуховування</h5><br><p>Бездротові навушники для щоденного використання.</p>",
+        }
+        return {
+            field: value
+            for field, value in result.items()
+            if options.get(f"generate_{field}", True)
         }
 
 
@@ -51,6 +63,35 @@ def test_processor_saves_each_result_and_resumes(tmp_path: Path) -> None:
     assert rerun.processed == 0
     assert rerun.skipped_completed == 1
     assert generator.calls == 1
+
+
+def test_processor_fills_only_missing_mono_field(tmp_path: Path) -> None:
+    path = tmp_path / "частково_готово.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Товари"
+    sheet.append(["Стара назва", "Старий опис", "Назва MONO", "Опис MONO"])
+    sheet.append([
+        "Acme X1",
+        "Бездротові навушники для щоденного використання.",
+        "Готова назва",
+        None,
+    ])
+    workbook.save(path)
+
+    generator = FakeGenerator()
+    result = run_processing(path, "Товари", 1, 2, generator)
+    assert result.processed == 1
+    assert generator.requests == [{
+        "generate_title": False,
+        "generate_description": True,
+        "existing_title": "Готова назва",
+        "existing_description": "",
+    }]
+
+    saved = load_workbook(path)["Товари"]
+    assert saved.cell(2, 3).value == "Готова назва"
+    assert saved.cell(2, 4).value.startswith("<h5>")
 
 
 def test_validation_rejects_links_and_bad_tags() -> None:

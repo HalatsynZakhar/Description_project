@@ -95,6 +95,7 @@ class ProductGenerator(Protocol):
         generate_description: bool = True,
         existing_title: str = "",
         existing_description: str = "",
+        article_code: str = "",
     ) -> dict[str, str]: ...
 
 
@@ -368,6 +369,7 @@ class GeminiGenerator:
         generate_description: bool = True,
         existing_title: str = "",
         existing_description: str = "",
+        article_code: str = "",
     ) -> dict[str, str]:
         fields = []
         if generate_title:
@@ -401,6 +403,12 @@ class GeminiGenerator:
                 "\n\nУже затверджений опис MONO (лише контекст, не повертай його):\n"
                 + existing_description
             )
+        if article_code and generate_title:
+            prompt += (
+                "\n\nАртикул буде додано програмою в кінці назви: ("
+                + article_code
+                + "). Не додавай цей артикул до поля title самостійно."
+            )
         last_error: Exception | None = None
         for key in self.pool.available():
             for attempt in range(MAX_TRANSIENT_RETRIES):
@@ -415,6 +423,7 @@ class GeminiGenerator:
                         source_description,
                         validate_title_field=generate_title,
                         validate_description_field=generate_description,
+                        article_code=article_code,
                     )
                     self.pool.mark_success(key)
                     return result
@@ -535,6 +544,20 @@ def shorten_title(title: str, limit: int = 100) -> str:
     return shortened
 
 
+def append_article_to_title(title: str, article_code: str) -> str:
+    """Додає артикул і за потреби скорочує назву з урахуванням цього суфікса."""
+    if not article_code:
+        return shorten_title(title)
+    suffix = f" ({article_code})"
+    if len(suffix) >= 100:
+        raise GenerationError("Артикул надто довгий: для назви не залишається місця.")
+    # Якщо модель попри інструкцію вже додала той самий артикул, дубля не буде.
+    if title.endswith(suffix):
+        title = title[: -len(suffix)].rstrip()
+    shortened = shorten_title(title, limit=100 - len(suffix))
+    return shortened + suffix
+
+
 def validate_description(description: str, source_description: str) -> None:
     if not description:
         raise GenerationError("Gemini повернув порожній опис.")
@@ -557,10 +580,11 @@ def validate_result(
     *,
     validate_title_field: bool = True,
     validate_description_field: bool = True,
+    article_code: str = "",
 ) -> None:
     if validate_title_field:
         original_title = result.get("title", "")
-        result["title"] = shorten_title(original_title)
+        result["title"] = append_article_to_title(original_title, article_code)
         if result["title"] != original_title:
             print("Gemini: назву скорочено до 100 символів.", flush=True)
         validate_title(result.get("title", ""))
@@ -613,6 +637,7 @@ def run_processing(
     source_title_column: int,
     source_description_column: int,
     generator: ProductGenerator,
+    article_column: int | None = None,
 ) -> ProcessingSummary:
     workbook = load_workbook(workbook_path)
     sheet = workbook[sheet_name]
@@ -625,6 +650,9 @@ def run_processing(
     for row in range(HEADER_ROW + 1, sheet.max_row + 1):
         source_title = cell_as_text(sheet.cell(row, source_title_column).value)
         source_description = cell_as_text(sheet.cell(row, source_description_column).value)
+        article_code = (
+            cell_as_text(sheet.cell(row, article_column).value) if article_column is not None else ""
+        )
         output_title = sheet.cell(row, title_output_column).value
         output_description = sheet.cell(row, description_output_column).value
 
@@ -656,6 +684,7 @@ def run_processing(
                 generate_description=not has_output_description,
                 existing_title=cell_as_text(output_title),
                 existing_description=cell_as_text(output_description),
+                article_code=article_code,
             )
         except NoAvailableKeysError:
             raise
@@ -673,6 +702,11 @@ def run_processing(
             continue
 
         if not has_output_title:
+            title_with_article = append_article_to_title(result["title"], article_code)
+            if title_with_article != result["title"]:
+                print("Gemini: назву скорочено з урахуванням артикула.", flush=True)
+            validate_title(title_with_article)
+            result["title"] = title_with_article
             sheet.cell(row, title_output_column).value = result["title"]
         if not has_output_description:
             sheet.cell(row, description_output_column).value = result["description"]
@@ -747,17 +781,28 @@ def main() -> int:
             description_column = choose_source_column(
                 sheet, "вихідний опис", excluded={title_column}
             )
+            article_column = choose_source_column(
+                sheet,
+                "артикул",
+                excluded={title_column, description_column},
+            )
             sheet_name = sheet.title
         finally:
             workbook.close()
 
         print(
             f"\nОбробка: {workbook_path.name}, аркуш «{sheet_name}», "
-            f"колонки {get_column_letter(title_column)} та {get_column_letter(description_column)}."
+            f"колонки {get_column_letter(title_column)}, {get_column_letter(description_column)} "
+            f"та {get_column_letter(article_column)}."
         )
         generator = GeminiGenerator(KeyPool())
         summary = run_processing(
-            workbook_path, sheet_name, title_column, description_column, generator
+            workbook_path,
+            sheet_name,
+            title_column,
+            description_column,
+            generator,
+            article_column=article_column,
         )
     except (ProcessorError, OSError) as error:
         print(f"\nЗупинено: {error}")

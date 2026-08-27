@@ -6,6 +6,7 @@ from openpyxl import Workbook, load_workbook
 import mono_processor
 from mono_processor import (
     KeyPool,
+    append_article_to_title,
     remove_decorative_tags,
     run_processing,
     shorten_title,
@@ -88,6 +89,7 @@ def test_processor_fills_only_missing_mono_field(tmp_path: Path) -> None:
         "generate_description": True,
         "existing_title": "Готова назва",
         "existing_description": "",
+        "article_code": "",
     }]
 
     saved = load_workbook(path)["Товари"]
@@ -124,6 +126,29 @@ def test_long_title_is_shortened_at_word_boundary() -> None:
     assert len(shortened) <= 100
     assert shortened == shortened.rstrip()
     assert not shortened.endswith("характеристикою")
+
+
+def test_article_is_appended_within_title_length_limit() -> None:
+    title = "Фігурка Marvel Веном із додатковою дуже довгою характеристикою кольору та особливостей моделі"
+    result = append_article_to_title(title, "G2771")
+    assert result.endswith(" (G2771)")
+    assert len(result) <= 100
+
+
+def test_processor_adds_article_only_to_generated_title(tmp_path: Path) -> None:
+    path = tmp_path / "товари_з_артикулом.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Товари"
+    sheet.append(["Стара назва", "Старий опис", "Артикул"])
+    sheet.append(["Acme X1", "Бездротові навушники для щоденного використання.", "A-123"])
+    workbook.save(path)
+
+    result = run_processing(path, "Товари", 1, 2, FakeGenerator(), article_column=3)
+    assert result.processed == 1
+    saved = load_workbook(path)["Товари"]
+    assert saved.cell(2, 4).value.endswith(" (A-123)")
+    assert len(saved.cell(2, 4).value) <= 100
 
 
 def test_source_sections_banned_by_mono_are_not_sent_to_model() -> None:

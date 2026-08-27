@@ -48,8 +48,9 @@
 - Помилки недоступності Gemini й непридатні відповіді записуються у локальний
   файл `logs/gemini_errors.jsonl`. У журналі немає API-ключів або текстів товарів.
 
-Модель за замовчуванням — `gemini-3.5-flash-lite`. Повний текст запиту до
-моделі збережено у [prompts/mono_product_prompt.txt](prompts/mono_product_prompt.txt).
+Модель за замовчуванням — `gemini-3.5-flash-lite`. Правила, які передаються
+моделі в кожному запиті, збережено у [MONO.md](MONO.md); технічний шаблон
+запиту — у [prompts/mono_product_prompt.txt](prompts/mono_product_prompt.txt).
 
 ## Перевірка
 

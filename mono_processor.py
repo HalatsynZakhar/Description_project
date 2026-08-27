@@ -22,6 +22,7 @@ from openpyxl.worksheet.worksheet import Worksheet
 BASE_DIR = Path(__file__).resolve().parent
 INPUT_DIR = BASE_DIR / "input"
 PROMPT_PATH = BASE_DIR / "prompts" / "mono_product_prompt.txt"
+MONO_RULES_PATH = BASE_DIR / "MONO.md"
 KEYS_PATH = BASE_DIR / "keys.json"
 KEY_STATE_PATH = BASE_DIR / "keys_state.json"
 ERROR_LOG_PATH = BASE_DIR / "logs" / "gemini_errors.jsonl"
@@ -259,9 +260,11 @@ class KeyPool:
 
 def load_prompt() -> str:
     try:
-        return PROMPT_PATH.read_text(encoding="utf-8")
+        prompt = PROMPT_PATH.read_text(encoding="utf-8")
+        rules = MONO_RULES_PATH.read_text(encoding="utf-8")
+        return rules + "\n\n---\n\n" + prompt
     except OSError as error:
-        raise ProcessorError(f"Не вдалося прочитати промпт {PROMPT_PATH}: {error}") from error
+        raise ProcessorError(f"Не вдалося прочитати правила або промпт: {error}") from error
 
 
 def normalized_section_heading(line: str) -> str:
